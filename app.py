@@ -1,138 +1,136 @@
-# app.py
-import json, queue, threading, time
-from datetime import datetime, timezone
+import json
+from datetime import datetime
 
-import pandas as pd
 import paho.mqtt.client as mqtt
-from paho.mqtt import publish
+import pandas as pd
 import streamlit as st
 import plotly.express as px
 from streamlit_autorefresh import st_autorefresh
 
-# ───────────────────── MQTT конфігурація ───────────────────────────────
-BROKER      = "broker.hivemq.com"
-PORT        = 1883
-TOPIC_DATA  = "BKR/LPNU/Lighting/Status"
-TOPIC_CMD   = "BKR/LPNU/Lighting/Cmd"
-TOPIC_OTA   = "BKR/LPNU/Lighting/OTA"
+BROKER = "broker.hivemq.com"
+PORT = 1883
+TOPIC_STATUS = "BKR/LPNU/Lighting/Status"
+TOPIC_CMD = "BKR/LPNU/Lighting/Cmd"
+TOPIC_OTA = "BKR/LPNU/Lighting/OTA"
 HISTORY_LEN = 500
 
-# ───────────────────── глобальний стан (потокобезпечний) ───────────────
-latest = {"lux": None, "temp": None, "presence": None, "duty": None, "ts": None}
-data_q = queue.Queue(maxsize=HISTORY_LEN)
+# ─── Global shared state ──────────────────────────────────────────────────
+sensor_data = {
+    "lux": None,
+    "temp": None,
+    "presence": None,
+    "duty": None,
+    "timestamp": None,
+}
 
-# ───────────────────── MQTT callbacks ───────────────────────────────────
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        client.subscribe(TOPIC_DATA, qos=1)
-    else:
-        print("MQTT connect failed", rc)
+class LightingMQTTClient:
+    """Handle MQTT communication and update sensor_data."""
 
-def on_message(client, userdata, msg):
-    try:
-        payload = json.loads(msg.payload.decode())
-        payload["ts"] = datetime.now(timezone.utc)
+    def __init__(self, broker=BROKER, port=PORT):
+        self.broker = broker
+        self.port = port
+        self.client = mqtt.Client()
+        self.client.on_connect = self._on_connect
+        self.client.on_message = self._on_message
 
-        # визначаємо, чи змінився хоча б один параметр
-        changed = any(
-            k in latest and payload.get(k) != latest.get(k)
-            for k in payload.keys()
-            if k != "ts"
-        )
+    def _on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            client.subscribe(TOPIC_STATUS)
+        else:
+            print(f"[ERROR] MQTT connect failed (rc={rc})")
 
-        # оновлюємо global latest навіть якщо значення не змінились
-        latest.update(payload)
+    def _on_message(self, client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            sensor_data.update(payload)
+            sensor_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            print("[WARN] on_message:", e)
 
-        # у чергу історії кладемо лише якщо дані змінились
-        if changed:
-            try:
-                data_q.put_nowait(payload)
-            except queue.Full:
-                data_q.get_nowait()
-                data_q.put_nowait(payload)
-    except Exception as e:
-        print("on_message error:", e)
+    def start(self):
+        try:
+            self.client.connect(self.broker, self.port, keepalive=60)
+            self.client.loop_start()
+            print("[INFO] MQTT loop started")
+        except Exception as e:
+            print(f"[ERROR] MQTT start failed: {e}")
 
-def mqtt_thread():
-    c = mqtt.Client(client_id=f"ui-{time.time_ns()}")
-    c.on_connect = on_connect
-    c.on_message = on_message
-    c.connect(BROKER, PORT, keepalive=60)
-    c.loop_forever()
+    def publish_command(self, target):
+        self.client.publish(TOPIC_CMD, json.dumps({"target_lux": target}))
 
-# ───────────────────── запускаємо MQTT один раз ────────────────────────
-if "mqtt_started" not in st.session_state:
-    threading.Thread(target=mqtt_thread, daemon=True).start()
-    st.session_state.mqtt_started = True
+    def publish_ota(self, url):
+        self.client.publish(TOPIC_OTA, url)
 
-# ───────────────────── ініціалізація session_state ─────────────────────
-if "latest" not in st.session_state:
-    st.session_state.latest = latest.copy()
-    #print(st.session_state.latest)
-if "history_df" not in st.session_state:
-    st.session_state.history_df = pd.DataFrame()
 
-# ───────────────────── UI заголовок та автоRefresh ─────────────────────
+# ─── Start MQTT client once ───────────────────────────────────────────────
+if "mqtt_client" not in st.session_state:
+    st.session_state.mqtt_client = LightingMQTTClient()
+    st.session_state.mqtt_client.start()
+
+# ─── Initialize history ───────────────────────────────────────────────────
+if "history" not in st.session_state:
+    st.session_state.history = {
+        "timestamp": [],
+        "lux": [],
+        "temp": [],
+        "presence": [],
+        "duty": [],
+    }
+
+# ─── Append latest reading to history ─────────────────────────────────────
+ts = sensor_data.get("timestamp")
+if ts:
+    st.session_state.history["timestamp"].append(ts)
+    for key in ("lux", "temp", "presence", "duty"):
+        st.session_state.history[key].append(sensor_data.get(key))
+
+    # limit history length
+    if len(st.session_state.history["timestamp"]) > HISTORY_LEN:
+        for k in st.session_state.history:
+            st.session_state.history[k] = st.session_state.history[k][-HISTORY_LEN:]
+
+df = pd.DataFrame(st.session_state.history).set_index("timestamp")
+
+# ─── Page config and auto refresh ─────────────────────────────────────────
 st.set_page_config(page_title="Монітор освітлення", layout="wide")
 st.title("💡 Інтелектуальна система освітлення")
 st_autorefresh(interval=2000, key="refresh")
 
-# ───────────────────── копіюємо дані з global → session_state ──────────
-#print(latest)
-st.session_state.latest.update(latest)  # thread-safe: маленький словник
-#print(st.session_state.latest)
-items = []
-while not data_q.empty():
-    items.append(data_q.get_nowait())
-if items:
-    df_new = pd.DataFrame(items).set_index("ts")
-    st.session_state.history_df = pd.concat(
-        [st.session_state.history_df, df_new]
-    ).tail(HISTORY_LEN)
-
-# ───────────────────── бічна панель керування ──────────────────────────
+# ─── Sidebar controls ─────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Керування")
     target = st.number_input("Цільова освітленість (лк)", 50.0, 1000.0, 400.0, 10.0)
     if st.button("Надіслати ціль"):
-        publish.single(TOPIC_CMD, json.dumps({"target_lux": target}),
-                       hostname=BROKER, port=PORT, qos=1)
+        st.session_state.mqtt_client.publish_command(target)
         st.success("Ціль надіслана")
     ota_url = st.text_input("URL прошивки для OTA")
     if st.button("Запустити OTA") and ota_url:
-        publish.single(TOPIC_OTA, ota_url, hostname=BROKER, port=PORT, qos=1)
+        st.session_state.mqtt_client.publish_ota(ota_url)
         st.warning("OTA ініційовано")
 
-# ───────────────────── поточні метрики ─────────────────────────────────
-l = st.session_state.latest
+# ─── Current metrics ─────────────────────────────────────────────────────
+l = sensor_data
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔆 Освітленість", f"{l['lux']} лк" if l['lux'] is not None else "—")
 c2.metric("🌡 Температура", f"{l['temp']} °C" if l['temp'] is not None else "—")
 c3.metric("🧍 Присутність", "Так" if l.get("presence") else "Ні")
 c4.metric("⚙️ ШІМ", f"{round(l['duty']*100)}%" if l['duty'] is not None else "—")
-st.caption(
-    f"⏱ Останнє оновлення: {l['ts'].strftime('%H:%M:%S') if l['ts'] else '—'}"
-)
+st.caption(f"⏱ Останнє оновлення: {ts or '—'}")
 
-# ───────────────────── історія графік ──────────────────────────────────
+# ─── History chart ───────────────────────────────────────────────────────
 with st.expander("📈 Історія змін"):
-    if not st.session_state.history_df.empty:
-        fig = px.line(
-            st.session_state.history_df,
-            x=st.session_state.history_df.index,
-            y=["lux", "temp"],
-            labels={"value": "Значення", "ts": "Час"},
-        )
+    if not df[["lux", "temp"]].dropna().empty:
+        fig = px.line(df, x=df.index, y=["lux", "temp"], labels={"value": "Значення", "timestamp": "Час"})
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Немає історичних даних.")
 
-# ───────────────────── статус ──────────────────────────────────────────
+# ─── Status info ─────────────────────────────────────────────────────────
 status = "🟢 Online" if l["lux"] is not None else "🔴 Очікування"
 st.markdown(
     f"<hr><b>Стан мережі:</b> {status}  "
     f"<br><b>Брокер:</b> {BROKER}  "
-    f"<br><b>Топік:</b> {TOPIC_DATA}",
+    f"<br><b>Топік:</b> {TOPIC_STATUS}",
     unsafe_allow_html=True,
 )
