@@ -33,15 +33,23 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         payload["ts"] = datetime.now(timezone.utc)
 
-        # оновлюємо global latest
+        # визначаємо, чи змінився хоча б один параметр
+        changed = any(
+            k in latest and payload.get(k) != latest.get(k)
+            for k in payload.keys()
+            if k != "ts"
+        )
+
+        # оновлюємо global latest навіть якщо значення не змінились
         latest.update(payload)
-        print(latest)
-        # зберігаємо в чергу історії
-        try:
-            data_q.put_nowait(payload)
-        except queue.Full:
-            data_q.get_nowait()
-            data_q.put_nowait(payload)
+
+        # у чергу історії кладемо лише якщо дані змінились
+        if changed:
+            try:
+                data_q.put_nowait(payload)
+            except queue.Full:
+                data_q.get_nowait()
+                data_q.put_nowait(payload)
     except Exception as e:
         print("on_message error:", e)
 
@@ -99,10 +107,10 @@ with st.sidebar:
 l = st.session_state.latest
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("🔆 Освітленість", f"{l['lux']} лк" if l["lux"] else "—")
-c2.metric("🌡 Температура", f"{l['temp']} °C" if l["temp"] else "—")
+c1.metric("🔆 Освітленість", f"{l['lux']} лк" if l['lux'] is not None else "—")
+c2.metric("🌡 Температура", f"{l['temp']} °C" if l['temp'] is not None else "—")
 c3.metric("🧍 Присутність", "Так" if l.get("presence") else "Ні")
-c4.metric("⚙️ ШІМ", f"{round(l['duty']*100)}%" if l["duty"] else "—")
+c4.metric("⚙️ ШІМ", f"{round(l['duty']*100)}%" if l['duty'] is not None else "—")
 st.caption(
     f"⏱ Останнє оновлення: {l['ts'].strftime('%H:%M:%S') if l['ts'] else '—'}"
 )
