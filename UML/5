@@ -1,0 +1,27 @@
+@startuml
+
+start
+:Зчитування цільового значення (Setpoint);
+:Зчитування поточного значення (Measured);
+:Обчислення похибки:
+e(t) = Setpoint - Measured;
+
+split
+    :Пропорційна дія:
+    P = Kp * e(t);
+split again
+    :Інтегральна дія:
+    I = I_prev + Ki * e(t) * dt;
+split again
+    :Диференціальна дія:
+    D = Kd * (e(t) - e_prev) / dt;
+endsplit
+
+:Сума дій:
+U = P + I + D;
+
+:Обмеження впливу (Clamp);
+:Передача на PWM (ШІМ);
+
+stop
+@enduml

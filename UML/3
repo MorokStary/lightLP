@@ -1,0 +1,45 @@
+@startuml АрхітектураКіберфізичноїСистеми
+
+skinparam dpi 160
+skinparam defaultTextAlignment center
+skinparam rectangle {
+  FontSize 14
+  FontName Arial
+  BackgroundColor White
+  BorderColor Black
+}
+
+top to bottom direction
+
+rectangle "Користувач" as User
+rectangle "Інтерфейс керування\nStreamlit Dashboard" as UI
+cloud "MQTT брокер\nbroker.hivemq.com" as Broker
+
+node "ESP32" as ESP {
+  rectangle "Сенсорна підсистема" as Sensors
+  rectangle "Обчислювальна логіка\nПІД-регулятор" as Logic
+  rectangle "PWM-вихід\n(керування світильником)" as PWM
+  rectangle "Комунікація\nWi-Fi, MQTT, HTTPS" as Net
+  rectangle "OTA-сервіс\nоновлення прошивки" as OTA
+  rectangle "Збереження\n(NVS Flash)" as NVS
+}
+
+rectangle "Світильник" as Light
+
+User --> UI : Доступ до панелі
+UI --> Broker : Надсилання цілей / OTA URL
+Broker --> ESP : Команди, OTA
+ESP --> Broker : Телеметрія
+
+Sensors --> Logic : Дані сенсорів
+NVS --> Logic : Конфігурація
+Logic --> PWM : Скважність
+Logic --> Net : Передача результатів
+Net --> Broker : MQTT
+Net --> UI : HTTPS доступ
+Broker --> OTA : Тригер оновлення
+OTA --> ESP : Завантаження прошивки
+
+PWM --> Light : Сигнал керування
+
+@enduml

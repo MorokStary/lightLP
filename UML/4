@@ -1,0 +1,22 @@
+@startuml
+skinparam componentStyle rectangle
+
+package "Embedded System" {
+  [sensors] --> [pid_control] : передає дані освітленості
+  [pid_control] --> [pwm_driver] : керування ШІМ
+  [mqtt_client] --> [pid_control] : встановлення цільового значення
+  [mqtt_client] --> [ota_service] : тригер OTA
+  [ota_service] ..> [ESP32 Flash] : оновлення прошивки
+}
+
+database "ESP32 Flash" {
+}
+
+cloud "MQTT Broker" {
+}
+
+[pid_control] --> [ESP32 Flash] : конфігураційні параметри
+[mqtt_client] --> "MQTT Broker" : телеметрія \n команди
+[ota_service] --> "MQTT Broker" : статус OTA
+
+@enduml

@@ -1,0 +1,30 @@
+@startuml ПринциповаСхемаМодуля
+skinparam backgroundColor #ffffff
+package "Живлення" {
+  [AC Filter] --> [AC/DC 24 V]
+  [AC/DC 24 V] --> [LED Driver CC]
+  [AC/DC 24 V] --> [Buck 5 V MP2307]
+  [Buck 5 V MP2307] --> [Лінійний 3.3 V]
+}
+package "Керування" {
+  node "ESP32-S3" as ESP32 {
+    interface GPIO4
+    interface GPIO18
+    interface GPIO17
+    interface GPIO23
+    interface GPIO34
+    interface UART0
+    interface WiFi
+    interface NVS_Flash
+  }
+  [BH1750] -down- ESP32: SDA/SCL\nGPIO17/18
+  [PIR Sensor] -left- ESP32: GPIO23
+  [NTC Divider] -right- ESP32: GPIO34
+}
+package "Виконавчий блок" {
+  [PC817 Opto] --> [MOSFET Driver]
+  [MOSFET Driver] --> [LED Driver CC] : DIM/PWM
+}
+ESP32 --> [PC817 Opto] : GPIO4 PWM @ 3.3 V
+[LED Driver CC] --> [LED Luminaire]
+@enduml

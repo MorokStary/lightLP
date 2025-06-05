@@ -1,0 +1,42 @@
+/* pid_control.c – реалізація ПІД-регулятора */
+
+#include "pid_control.h"
+#include <math.h>
+
+static pid_cfg_t C;
+static float i_term = 0.0f;
+static float prev_err = 0.0f;
+
+esp_err_t pid_control_init(const pid_cfg_t *cfg)
+{
+    if (!cfg) return ESP_ERR_INVALID_ARG;
+    C = *cfg;
+    i_term = 0.0f;
+    prev_err = 0.0f;
+    return ESP_OK;
+}
+
+float pid_control_update(float setpoint, float meas)
+{
+    float err = setpoint - meas;
+    float p   = C.kp * err;
+
+    i_term += C.ki * err * C.dt;
+    if (i_term > C.i_max) i_term = C.i_max;
+    if (i_term < C.i_min) i_term = C.i_min;
+
+    float d   = C.kd * (err - prev_err) / C.dt;
+    prev_err  = err;
+
+    float out = p + i_term + d;
+    if (out > C.out_max) out = C.out_max;
+    if (out < C.out_min) out = C.out_min;
+
+    return out;
+}
+
+void pid_control_reset(void)
+{
+    i_term = 0.0f;
+    prev_err = 0.0f;
+}

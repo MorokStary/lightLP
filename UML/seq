@@ -1,0 +1,81 @@
+@startuml
+
+'================= Етап завантаження =================
+participant ESP           as "ESP32"
+participant NVS           as "NVS Storage"
+participant WiFi          as "wifi_manager"
+participant Broker        as "MQTT Broker"
+
+ESP -> NVS        : init_nvs()                     ## завантаження конфігурації
+NVS --> ESP       : target_lux Kp Ki Kd
+ESP -> WiFi       : wifi_manager_init()
+WiFi -> Broker    : MQTT CONNECT
+Broker --> WiFi   : CONNACK
+WiFi --> ESP      : mqtt_connected()
+
+'================= Нормальний цикл керування =================
+participant Timer         as "FreeRTOS Timer Tick"
+participant Control       as "control_task"
+participant Sensors       as "sensors"
+participant PID           as "pid_control"
+participant PWM           as "pwm_driver"
+participant Lamp          as "Світильник"
+participant UI            as "Streamlit App"
+
+loop 200 ms керуючий цикл
+  Timer -> Control : vTaskDelayUntil()
+  Control -> Sensors : read_all()
+  Sensors --> Control : lux temp presence
+  alt presence == false
+    Control --> PID  : setpoint = 0.2 * target_lux
+  else presence == true
+    Control --> PID  : setpoint = target_lux
+  end
+  Control -> PID      : pid_compute()
+  PID --> PWM         : duty_cycle
+  PWM -> Lamp         : PWM сигнал (GPIO4)
+  Control -> WiFi     : publish telemetry JSON
+  WiFi -> Broker      : PUBLISH telemetry
+  Broker -> UI        : deliver telemetry
+end
+
+'================= Користувач змінює параметри =================
+actor User
+User -> UI            : вводить новий target_lux
+UI -> Broker          : PUBLISH Cmd {"target_lux":X}
+Broker -> WiFi        : deliver Cmd
+WiFi -> ESP           : mqtt_app_callback()
+ESP -> NVS            : save target_lux
+ESP -> PID            : update setpoint
+
+'================= Запуск OTA-оновлення =================
+User -> UI            : вводить firmware URL
+UI -> Broker          : PUBLISH OTA "https://.../fw.bin"
+Broker -> WiFi        : deliver OTA
+WiFi -> ESP           : ota_service.handle()
+participant OTA       as "esp_https_ota"
+ESP -> OTA            : ota_update_start(url)
+
+group HTTPS handshake
+  OTA -> OTA          : TLS рукопотискання + SHA-256 перевірка
+end
+
+alt хеш валідний
+  OTA -> ESP          : esp_ota_set_boot_partition()
+  ESP -> Broker       : PUBLISH status "update OK"
+  ESP -> ESP          : esp_restart()
+else хеш невалідний
+  OTA -> ESP          : ota_abort()
+  ESP -> Broker       : PUBLISH status "update FAIL"
+end
+
+'================= Перезавантаження та відкат =================
+ESP -> Bootloader     : завантаження активного розділу
+Bootloader -> Bootloader : перевірка SHA-256
+alt валідно
+  Bootloader -> ESP   : запуск нової прошивки
+else збій
+  Bootloader -> ESP   : відкат до попереднього розділу
+end
+
+@enduml
